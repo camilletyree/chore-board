@@ -34,10 +34,11 @@ node server.js
 # open http://localhost:8080
 ```
 
-Run the engine tests:
+Run the tests:
 
 ```bash
-npm test            # == node test/scheduler.test.js
+npm test                 # pure engine + sync reducers (offline, fast)
+npm run test:integration # spins up a real server, two simulated clients end-to-end
 ```
 
 You can also open `public/index.html` directly as a file — it falls back to per-device
@@ -54,9 +55,12 @@ chore-board/
 │   ├── index.html         # markup + tab shell
 │   ├── styles.css         # all styling
 │   ├── scheduler.js       # PURE engine: cadence, obligations, assignment, matrix (no DOM/IO)
-│   └── app.js             # state, storage, rendering, event wiring (imports scheduler.js)
+│   ├── sync.js            # PURE sync core: whole-doc <-> entities, delta merge (no DOM/IO)
+│   └── app.js             # state, storage, rendering, sync client (imports scheduler.js + sync.js)
 ├── test/
-│   └── scheduler.test.js  # node test runner for the pure engine
+│   ├── scheduler.test.js  # node test runner for the pure engine
+│   ├── sync.test.js       # node test runner for the pure sync reducers
+│   └── integration.test.mjs # end-to-end: spawns a server, two simulated clients, migration + SSE
 ├── data/                  # runtime state.json (gitignored) — the shared source of truth
 ├── Dockerfile
 └── docker-compose.yml
@@ -104,8 +108,14 @@ Container Manager isn't installed, or you'd rather not use it:
 
 ## Notes & limits
 
-- **Last-write-wins.** The whole board is one JSON document; concurrent edits from two devices can
-  clobber each other. The app polls every 15s and on window focus to pull others' changes. Fine for
-  a family; see `VISION.md` for the path to finer-grained sync if needed.
+- **Per-entity live sync.** The board is stored as addressable records (people, chores, rooms,
+  matrix types, settings, the week, and each completed box) and devices exchange small **deltas**, so
+  independent edits never clobber each other — two kids checking different boxes, or a parent renaming
+  a chore while another edits a different one, all stick. Same-record edits resolve last-write-wins.
+  Changes push to other devices in about a second over Server-Sent Events (with a short poll as a
+  fallback), and edits made while offline queue in an outbox and flush on reconnect.
+- **State migrates automatically.** An older `data/state.json` (one whole-document blob) is converted
+  to the entity store in place on first start; no manual step. `GET/PUT /api/state` still works as a
+  whole-board snapshot/restore endpoint.
 - **No authentication.** Intended for a trusted LAN. Don't expose it directly to the internet
   without putting auth/a reverse proxy in front.

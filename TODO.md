@@ -1,5 +1,13 @@
 # TODO
 
+> **Status (implemented).** Slices 1–3 below are done: entities on disk with `/api/changes` GET/POST
+> (per-entity LWW), `/api/stream` SSE push with a poll fallback, the client outbox, and the
+> focused-row re-render guard. `public/sync.js` holds the pure core (`decompose`/`recompose`/
+> `applyChanges`/`diffOps`); covered by `test/sync.test.js` and the end-to-end `npm run
+> test:integration`. **Still deferred:** field-level LWW (Slice 4) — only do it if same-record,
+> different-field concurrent edits become a real problem. The rest of this doc is kept as the design
+> record.
+
 ## Per-entity sync (replace whole-document last-write-wins)
 
 ### Why
@@ -93,13 +101,25 @@ refresh (tie completion records to `week._seq` or a `weekId` and drop stale ones
   detects delta support by probing `/api/changes` once; if 404, stay in whole-doc mode.
 
 ### Suggested sequencing
-1. **Slice 1 (ship first):** promote `completion` to a keyed collection + add `/api/changes` GET/POST
-   with per-entity LWW, but only wire the client to use deltas for `completion`. Removes the box-check
-   clobber/lag immediately, minimal blast radius.
-2. **Slice 2:** move `people`/`chores`/`rooms`/`matrixTypes`/`settings` onto the delta path; add the
-   focused-row re-render guard and the outbox.
-3. **Slice 3:** add SSE push; drop poll interval to a fallback.
+1. ✅ **Slice 1:** promote `completion` to a keyed collection + add `/api/changes` GET/POST with
+   per-entity LWW. (Shipped together with Slice 2 — the server was built generic from the start, with
+   the full entities model on disk and an idempotent migration.)
+2. ✅ **Slice 2:** all collections (`people`/`chores`/`rooms`/`matrixTypes`/`settings`/`week`) on the
+   delta path; focused-row re-render guard + localStorage outbox.
+3. ✅ **Slice 3:** SSE push (`/api/stream`); poll dropped to a 4s fallback when the stream is down.
 4. **Later (only if needed):** field-level LWW.
+
+### What shipped vs. the design above (notes for the next reader)
+- The client keeps its rendered whole-doc `S` and a canonical entity store `ent`; `save()` diffs `S`
+  vs `ent` (`diffOps`) so existing mutation handlers were untouched — they still just call `save()`.
+- `matrixExclude` is folded into the `settings` singleton (as designed); `recompose` splits it back
+  out so the rest of `app.js` still sees `S.matrixExclude`.
+- Stale completion is handled by **tombstoning on `generate()`** (via the diff), not a `weekId` field;
+  uid reuse across weeks is safe under `_updatedAt` LWW. (See the design note under "The actual win".)
+- **`flush()` does not advance `localSeq`** — only `pull()` does, since only it fetches the changes up
+  to that seq. Advancing on POST skips other devices' interleaved writes. (Easy to get wrong; tested.)
+- Default transport is **SSE with a 4s poll fallback** (resolves the "SSE vs short-poll" open
+  question in favor of SSE, kept cheap because pulls hit the lightweight `/api/changes`).
 
 ### Testing
 - Engine is unaffected — `scheduler.js` stays pure; `npm test` should remain green throughout.

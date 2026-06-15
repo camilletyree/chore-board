@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test/scheduler.test.js"
+    "test": "node test/scheduler.test.js && node test/sync.test.js",
+    "test:integration": "node test/integration.test.mjs"
   }
 }

@@ -14,12 +14,21 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
    `Date.now()` reaching into globals — dates come in as ISO strings / args. This is what makes the
    engine testable and is the single source of truth shared by the browser and the tests. If you're
    adding scheduling behavior, it goes here, and it gets a test.
-2. **`public/app.js` owns side effects:** state, storage, rendering, events. It imports the engine.
-   It should contain no scheduling rules — only orchestration and presentation.
-3. **`server.js` is a dumb store.** It serves `public/` statically and persists one JSON blob at
-   `/api/state` (GET/PUT). It has no domain knowledge and shouldn't gain any. Keep it dependency-free.
-4. **One persisted document.** The entire board is the object `S` in `app.js`, saved whole. Every
-   mutation goes through `save()` (which bumps `S.rev` and PUTs/falls back to localStorage).
+2. **All sync logic lives in `public/sync.js` and stays pure.** No DOM, no `fetch`, no `Date.now()`
+   (the caller injects `now`). It's the other pure module shared by browser, server, and tests:
+   whole-doc ↔ entities (`decompose`/`recompose`), the merge reducer (`applyChanges`), and the
+   local-edit differ (`diffOps`). Sync behavior goes here and gets a test in `test/sync.test.js`.
+3. **`public/app.js` owns side effects:** state, storage, rendering, events, the network sync client.
+   It imports both pure modules. No scheduling *or* sync rules — only orchestration and presentation.
+4. **`server.js` is a dumb store.** Serves `public/` statically; persists entities and stamps each
+   applied write with a monotonic `_seq`, resolving same-record conflicts by last-write-wins on the
+   client `_updatedAt`. That's the *only* logic it has — **no scheduling/domain knowledge**, no deps.
+5. **Entities, synced as deltas.** On disk: `{ serverSeq, entities }` (see `sync.js` for the shape).
+   The browser holds the canonical `ent` (entities + `_seq`/`_updatedAt` metadata) and renders the
+   recomposed whole-doc `S`. Every mutation still goes through `save()`, which now diffs `S` vs `ent`
+   into per-record ops, queues them in a localStorage **outbox**, and POSTs `/api/changes`. Remote
+   edits arrive via SSE-triggered (or polled) `pull()` and merge by `_seq`. `localStorage` is the
+   offline fallback only; the server is the source of truth when present.
 
 ## Domain model (glossary)
 
@@ -69,6 +78,21 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
 
 `test/scheduler.test.js` covers all of the above. **Run `npm test` after any engine change.**
 
+## Sync invariants worth a test if you touch sync
+
+- Independent edits never conflict: different chores/people/boxes edited at once all stick.
+- Same-record edits resolve by last-write-wins (newer `_updatedAt`); the loser gets a `conflict`.
+- `applyChanges` is monotonic: a higher `_seq` wins, an out-of-order lower `_seq` is a no-op.
+- Tombstones (`_deleted`) propagate deletes and drop out of `recompose`.
+- `diffOps` emits an op only for records that actually changed (key-order-insensitive compare).
+- An unsynced local edit in the outbox survives a `pull()` (the `skip` set protects it).
+- Round-trip: `recompose(decompose(S))` preserves the board; `completion` and `matrixExclude` move
+  to/from their entity homes correctly.
+
+`test/sync.test.js` covers the pure reducers (in `npm test`). `npm run test:integration` spins up a
+real server and drives two simulated clients end-to-end (migration, SSE, LWW). **Run `npm test`
+after any sync change**, and `npm run test:integration` if you touch the wire protocol or server.
+
 ## Conventions
 
 - ES modules everywhere (`"type": "module"`). Browser loads `app.js` via `<script type="module">`.
@@ -82,6 +106,16 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
 
 - Dates are date-only and local; always go through the helpers in `scheduler.js` (`parseISO`,
   `toISO`, `addDays`, `addCadence`) — don't hand-roll `Date` math, especially for months/years.
-- The live-sync `pull()` skips while an input/select is focused so it won't clobber an in-progress
-  edit. Keep that guard if you change sync.
-- `data/state.json` is gitignored. Don't commit real family data.
+- `pull()` re-renders on remote changes, but **never while a field is focused** (it would clobber an
+  in-progress edit): it merges into `S` and, on the week grid, surgically refreshes only the
+  checkboxes so a sibling's check-off shows without stealing focus. Keep that guard if you change sync.
+- `flush()` must **not** advance `localSeq` — only `pull()` may, because only `pull()` actually
+  fetches the changes up to that seq. Advancing it on POST would skip other devices' interleaved
+  writes (a subtle clobber). The server's broadcast triggers the reconciling `pull()` right after.
+- Completion records are keyed by assignment `uid` (`choreId#seq`), which **repeats across weeks**.
+  `generate()` clears `week.completion`, so `diffOps` tombstones the old records; LWW handles the
+  uid reuse. Don't assume a completion `uid` is globally unique.
+- `data/state.json` is gitignored. Don't commit real family data. The file is `{ serverSeq, entities }`;
+  the server migrates an old whole-doc file in place on first start (idempotent), and GCs tombstones >30d.
+- `/api/state` (GET recomposed snapshot / PUT wholesale replace) is kept for back-compat and reset;
+  normal edits go through `/api/changes`. Don't route per-record edits back through `/api/state`.

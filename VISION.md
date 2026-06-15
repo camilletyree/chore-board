@@ -39,7 +39,8 @@ can read end-to-end, host on a NAS, and modify.
 - Cadence in days/weeks/months/years with calendar-correct math.
 - Per-chore lock-to-a-person, or auto-balance.
 - Room × chore matrix with size-scaled durations and a compatibility grid for incompatible cells.
-- Shared state across devices via a small JSON API, with a per-device offline fallback.
+- Real-time shared state across devices: per-entity delta sync over a small JSON API (independent
+  edits never clobber; ~1s propagation via Server-Sent Events), with an offline outbox fallback.
 
 ## Open design decisions & roadmap
 
@@ -69,7 +70,9 @@ Possible extensions: configurable escalation *targets* (to a specific parent, or
 adults), notifications when something escalates, and a "stuck" report of chronically delinquent chores.
 
 ### Sync & history
-- Finer-grained sync (per-entity PATCH or a tiny revision log) if last-write-wins ever bites.
+- ✅ Finer-grained sync — **done**: per-entity deltas with last-write-wins per record, SSE push, and
+  an offline outbox (see `TODO.md` and `public/sync.js`). Remaining stretch: field-level LWW, only if
+  same-record/different-field concurrent edits ever become a real problem.
 - A completion **history/stats** view: who did how much, streaks, which chores are chronically late —
   the data (`lastDone`, completion records) is already being captured.
 
