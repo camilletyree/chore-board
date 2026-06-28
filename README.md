@@ -12,9 +12,19 @@ the same network. State is shared: everyone sees and edits the same board.
 
 ## What it does
 
+- **Guided setup.** A first-run wizard builds a board tailored to your home — describe the
+  bedrooms/bathrooms/floors, who lives there (with kids' ages), pets, and yard, and ChoreBoard
+  generates sized rooms, a matrix of cleaning types, and a realistic chore list. Pick a ready-made
+  preset (studio → large multigenerational house) or build your own; re-run it anytime from **Set up**.
 - **Smart weekly schedule.** Each person-day is a time bin (default 30 min weekdays / 60 min
   weekends, per-person). The engine packs due chores into bins, balancing load by *fraction of
   capacity* so kids aren't starved and adults aren't buried, and surfaces anything that won't fit.
+- **Fairness modes.** Balance by free time, or *rotate & share* so the same person isn't perpetually
+  stuck with the toilets and the trash.
+- **History & stats.** A durable completion log shows who pulled their weight, the most-done chores,
+  recent activity, and what's slipping right now.
+- **Installable & printable.** Install it to a phone/tablet home screen (PWA, offline shell), and
+  print a clean per-person weekly "fridge sheet."
 - **Obligation + delinquency lifecycle.** A chore comes due on its cadence and is assigned to a
   *holder*. They have a grace window (default 3 days) to check it off. Miss it and it goes
   **delinquent** — pinned to the same person at the top of their day. After a configurable number
@@ -37,7 +47,7 @@ node server.js
 Run the tests:
 
 ```bash
-npm test                 # pure engine + sync reducers (offline, fast)
+npm test                 # all pure logic: engine, sync, home builder, stats (offline, fast)
 npm run test:integration # spins up a real server, two simulated clients end-to-end
 ```
 
@@ -52,14 +62,19 @@ chore-board/
 ├── server.js              # zero-dependency static server + /api/state JSON store
 ├── package.json           # ES modules; "start" and "test" scripts; no runtime deps
 ├── public/
-│   ├── index.html         # markup + tab shell
-│   ├── styles.css         # all styling
-│   ├── scheduler.js       # PURE engine: cadence, obligations, assignment, matrix (no DOM/IO)
+│   ├── index.html         # markup + tab shell + setup-wizard modal
+│   ├── styles.css         # all styling (incl. wizard, history, print "fridge sheet")
+│   ├── scheduler.js       # PURE engine: cadence, obligations, assignment, fairness, matrix (no DOM/IO)
 │   ├── sync.js            # PURE sync core: whole-doc <-> entities, delta merge (no DOM/IO)
-│   └── app.js             # state, storage, rendering, sync client (imports scheduler.js + sync.js)
+│   ├── templates.js       # PURE home builder + chore library + presets (no DOM/IO)
+│   ├── stats.js           # PURE completion-history aggregation for the History view (no DOM/IO)
+│   ├── app.js             # state, storage, rendering, sync client, setup wizard (imports the pure modules)
+│   ├── manifest.webmanifest, icon.svg, sw.js   # PWA: install + offline shell
 ├── test/
-│   ├── scheduler.test.js  # node test runner for the pure engine
-│   ├── sync.test.js       # node test runner for the pure sync reducers
+│   ├── scheduler.test.js  # pure engine (incl. fairness)
+│   ├── sync.test.js       # pure sync reducers (incl. the history collection)
+│   ├── templates.test.js  # the pure home builder
+│   ├── stats.test.js      # the pure history aggregation
 │   └── integration.test.mjs # end-to-end: spawns a server, two simulated clients, migration + SSE
 ├── data/                  # runtime state.json (gitignored) — the shared source of truth
 ├── Dockerfile
@@ -117,5 +132,10 @@ Container Manager isn't installed, or you'd rather not use it:
 - **State migrates automatically.** An older `data/state.json` (one whole-document blob) is converted
   to the entity store in place on first start; no manual step. `GET/PUT /api/state` still works as a
   whole-board snapshot/restore endpoint.
+- **Install & offline.** ChoreBoard ships a web app manifest and a service worker, so it can be
+  installed to a phone/tablet home screen and the app shell loads offline. Service workers require a
+  *secure context*, so install/offline activates on `localhost` or behind HTTPS — over a plain-http
+  LAN IP it simply doesn't register (the app still works; the offline edit outbox is the real
+  resilience either way).
 - **No authentication.** Intended for a trusted LAN. Don't expose it directly to the internet
   without putting auth/a reverse proxy in front.

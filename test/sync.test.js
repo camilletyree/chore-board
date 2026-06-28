@@ -138,5 +138,33 @@ console.log('diffOps: only the touched entity becomes an op');
   eq(d.ops[0].rec.matrixExclude, [], 'matrixExclude travels inside the settings record');
 }
 
+console.log('history: durable completion log round-trips and stays independent');
+{
+  const S = sampleDoc();
+  S.history = [{ id: 'h1', choreId: 'c1', name: 'Dishes', personId: 'me', minutes: 10, date: '2026-06-15', weekStartISO: '2026-06-15' }];
+  const ent = decompose(S);
+  eq(Object.keys(ent.history), ['h1'], 'history keyed by its own id');
+  const S2 = recompose(stamp(decompose(S)), 2);
+  eq(S2.history.length, 1, 'history restored as an array');
+  eq([S2.history[0].choreId, S2.history[0].personId, S2.history[0].minutes], ['c1', 'me', 10], 'history fields preserved');
+
+  // a new remote history record lands without touching the current week's completion
+  const e2 = stamp(decompose(S));
+  const r = applyChanges(e2, [{ collection: 'history', id: 'h2', rec: { id: 'h2', choreId: 'c2', personId: 'me', minutes: 5, date: '2026-06-16', _seq: 9, _updatedAt: NOW } }]);
+  eq(Object.keys(r.ent.history).sort(), ['h1', 'h2'], 'a remote completion appends to history');
+  eq(Object.keys(r.ent.completion), ['c1#0'], 'the current-week completion is untouched');
+}
+
+console.log('settings: fairness mode is carried');
+{
+  eq(decompose(sampleDoc()).settings.fairness, 'balanced', 'fairness defaults to balanced');
+  const ent = stamp(decompose(sampleDoc()));
+  const S = recompose(ent, 1);
+  S.settings.fairness = 'rotate';
+  const d = diffOps(ent, S, NOW);
+  eq(d.ops.map(o => o.collection), ['settings'], 'changing fairness is a single settings op');
+  eq(d.ops[0].rec.fairness, 'rotate', 'fairness travels inside the settings record');
+}
+
 console.log(fails ? `\n${fails} TEST(S) FAILED` : '\nALL TESTS PASSED');
 process.exit(fails ? 1 : 0);

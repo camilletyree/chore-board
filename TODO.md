@@ -1,7 +1,14 @@
 # TODO
 
-> **Status (implemented).** Slices 1–3 below are done: entities on disk with `/api/changes` GET/POST
-> (per-entity LWW), `/api/stream` SSE push with a poll fallback, the client outbox, and the
+> **Beta status.** Beyond the sync work below, the Beta shipped: a first-run **setup wizard** +
+> parametric **home templates** with a real chore **library** (`public/templates.js`), **fairness
+> modes** (rotate & share, in `scheduler.js`), a durable **history** collection + **stats** view
+> (`public/stats.js`), **PWA** install/offline (`manifest.webmanifest`/`sw.js`), and a print
+> "fridge sheet." All pure logic is unit-tested (`npm test` runs engine + sync + templates + stats);
+> `npm run test:integration` still covers the wire protocol. See `VISION.md` for what's next.
+>
+> **Status (sync, implemented).** Slices 1–3 below are done: entities on disk with `/api/changes`
+> GET/POST (per-entity LWW), `/api/stream` SSE push with a poll fallback, the client outbox, and the
 > focused-row re-render guard. `public/sync.js` holds the pure core (`decompose`/`recompose`/
 > `applyChanges`/`diffOps`); covered by `test/sync.test.js` and the end-to-end `npm run
 > test:integration`. **Still deferred:** field-level LWW (Slice 4) — only do it if same-record,

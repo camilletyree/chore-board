@@ -10,7 +10,8 @@
 // applied write with a monotonic `_seq`, and resolves same-record conflicts by last-write-
 // wins on the client `_updatedAt`. It runs NO scheduling logic.
 //
-//   On disk: { serverSeq, entities: { people, chores, rooms, matrixTypes, completion, settings, week } }
+//   On disk: { serverSeq, entities: { people, chores, rooms, matrixTypes, completion, history, settings, week } }
+//   (settings also carries fairness + matrixExclude; history is the durable completion log.)
 //
 // Endpoints:
 //   GET  /api/changes?since=<seq>  -> { serverSeq, changes:[{collection,id,rec}] }   (records with _seq > since)

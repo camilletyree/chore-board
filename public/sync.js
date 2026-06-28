@@ -15,10 +15,14 @@
 // Mapping whole-doc <-> entities:
 //   people/chores/rooms/matrixTypes  <-> same-named keyed collections (by id)
 //   week.completion                  <-> `completion` keyed collection (by assignment uid)
+//   history (durable completion log)  <-> `history` keyed collection (by its own id)
 //   settings + matrixExclude         <-> `settings` singleton (matrixExclude folded in)
 //   week minus completion            <-> `week` singleton
+//
+// `completion` is the CURRENT week's check-offs (cleared/rebuilt every generate). `history` is the
+// PERMANENT log of completed tasks (one record per check-off, never cleared) that the stats view reads.
 
-export const KEYED = ['people', 'chores', 'rooms', 'matrixTypes', 'completion'];
+export const KEYED = ['people', 'chores', 'rooms', 'matrixTypes', 'completion', 'history'];
 export const SINGLE = ['settings', 'week'];
 export const COLLECTIONS = [...KEYED, ...SINGLE];
 
@@ -26,7 +30,7 @@ const META = new Set(['_seq', '_updatedAt', '_deleted']);
 
 /* ---------- small pure helpers ---------- */
 export function emptyEnt() {
-  return { people: {}, chores: {}, rooms: {}, matrixTypes: {}, completion: {}, settings: null, week: null };
+  return { people: {}, chores: {}, rooms: {}, matrixTypes: {}, completion: {}, history: {}, settings: null, week: null };
 }
 export function domainOf(rec) {
   const out = {};
@@ -47,14 +51,14 @@ const isLive = rec => rec && !rec._deleted;
 /* ---------- whole-doc  ->  entities (domain-only; no metadata) ---------- */
 export function decompose(S) {
   const ent = emptyEnt();
-  for (const coll of ['people', 'chores', 'rooms', 'matrixTypes'])
+  for (const coll of ['people', 'chores', 'rooms', 'matrixTypes', 'history'])
     for (const rec of (S[coll] || [])) if (rec && rec.id != null) ent[coll][rec.id] = domainOf(rec);
   const comp = (S.week && S.week.completion) || {};
   for (const uid of Object.keys(comp)) ent.completion[uid] = domainOf(comp[uid]);
   const st = S.settings || {};
   ent.settings = {
     graceDays: st.graceDays ?? 3, escalateAfter: st.escalateAfter ?? 2,
-    weekStartISO: st.weekStartISO ?? null, matrixExclude: S.matrixExclude || [],
+    weekStartISO: st.weekStartISO ?? null, fairness: st.fairness ?? 'balanced', matrixExclude: S.matrixExclude || [],
   };
   if (S.week) { const { completion, ...wk } = S.week; ent.week = domainOf(wk); }
   return ent;
@@ -63,10 +67,10 @@ export function decompose(S) {
 /* ---------- entities  ->  whole-doc (skips tombstones; rebuilds folded fields) ---------- */
 export function recompose(ent, serverSeq = 0) {
   const S = { rev: serverSeq };
-  for (const coll of ['people', 'chores', 'rooms', 'matrixTypes'])
+  for (const coll of ['people', 'chores', 'rooms', 'matrixTypes', 'history'])
     S[coll] = Object.values(ent[coll] || {}).filter(isLive).map(domainOf);
   const st = isLive(ent.settings) ? ent.settings : {};
-  S.settings = { graceDays: st.graceDays ?? 3, escalateAfter: st.escalateAfter ?? 2, weekStartISO: st.weekStartISO ?? null };
+  S.settings = { graceDays: st.graceDays ?? 3, escalateAfter: st.escalateAfter ?? 2, weekStartISO: st.weekStartISO ?? null, fairness: st.fairness ?? 'balanced' };
   S.matrixExclude = st.matrixExclude || [];
   if (isLive(ent.week)) {
     S.week = { ...domainOf(ent.week), completion: {} };

@@ -119,5 +119,45 @@ console.log('matrix: size scaling + exclusions');
   eq(ch2.find(c => c.matrixKey === 't1:r1').assignee, 'kid10', 'per-room assignee override preserved');
 }
 
+console.log('fairness modes');
+{
+  // two equally-free adults; the chore was last held by "me"
+  const adults = [
+    { id: 'me', name: 'Me', isAdult: true, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+    { id: 'gabby', name: 'Gabby', isAdult: true, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+  ];
+  const inst = buildInstances([chore({ adultOnly: true, assignedOn: TODAY, lastHolder: 'me' })], WS, TODAY, 3);
+  eq(assignInstances(inst, adults).assignments[0].personId, 'me', 'balanced keeps the most-free (stable) pick');
+  eq(assignInstances(inst, adults, { fairness: 'rotate', seed: WS }).assignments[0].personId, 'gabby', 'rotate steers away from the last holder');
+
+  // rotate still balances among the non-last-holders by capacity
+  const three = [
+    { id: 'me', isAdult: true, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+    { id: 'gabby', isAdult: true, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+    { id: 'pat', isAdult: true, weekdayBudget: 5, weekendBudget: 5, maxTaskMinutes: 0, active: true },
+  ];
+  const r = assignInstances(buildInstances([chore({ adultOnly: true, assignedOn: TODAY, lastHolder: 'me' })], WS, TODAY, 3), three, { fairness: 'rotate', seed: WS });
+  eq(r.assignments[0].personId, 'gabby', 'rotate picks the freest among the non-last-holders, not the last holder');
+
+  // deterministic for a given seed (reproducible shuffle, no Math.random)
+  const a = assignInstances(inst, adults, { fairness: 'rotate', seed: '2026-06-15' }).assignments[0].personId;
+  const b = assignInstances(inst, adults, { fairness: 'rotate', seed: '2026-06-15' }).assignments[0].personId;
+  eq(a, b, 'rotate is deterministic for a given seed');
+}
+
+console.log('age-appropriateness (minAge)');
+{
+  const ages = [
+    { id: 'mom', isAdult: true, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+    { id: 'kid8', isAdult: false, age: 8, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+    { id: 'kid14', isAdult: false, age: 14, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true },
+  ];
+  const mk = () => buildInstances([chore({ minAge: 12, assignedOn: TODAY })], WS, TODAY, 3);
+  eq(assignInstances(mk(), ages).assignments[0].personId !== 'kid8', true, 'a minAge-12 chore never lands on the 8-year-old');
+  eq(assignInstances(mk(), [ages[1], ages[2]]).assignments[0].personId, 'kid14', 'among kids, only the old-enough one (14) takes a minAge-12 chore');
+  const legacy = [{ id: 'x', isAdult: false, weekdayBudget: 60, weekendBudget: 60, maxTaskMinutes: 0, active: true }];
+  eq(assignInstances(mk(), legacy).assignments[0].personId, 'x', 'a person with no age set is unconstrained by minAge (back-compat)');
+}
+
 console.log(fails ? `\n${fails} TEST(S) FAILED` : '\nALL TESTS PASSED');
 process.exit(fails ? 1 : 0);

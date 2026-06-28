@@ -31,16 +31,27 @@ can read end-to-end, host on a NAS, and modify.
   room sizes, and compatibilities are all data, edited in the app, not constants in code.
 - **Self-hostable and dependency-light.** Runs anywhere Node runs; no build, no cloud.
 
-## Current capabilities (v2)
+## Current capabilities (Beta)
 
+- **Guided setup.** A first-run wizard (and an anytime "Set up" button) builds a tailored board from a
+  home profile — bedrooms/bathrooms/floors, who lives there, pets, yard — via a parametric builder,
+  with a gallery of presets across home sizes and occupancies (`public/templates.js`).
+- **A real chore library.** A vetted catalog of matrix chore-types + manual chores, gated by what a
+  home actually has (pets, yard, garage, baby, multi-story…) and scaled to each kid's age.
 - Weekly time-budgeted assignment grid with per-person capacity meters and an overflow report.
 - Obligation lifecycle: cadence-opened obligations, a grace window, delinquency, and escalation to an
   adult after N delinquency cycles.
+- **Fairness modes.** Balance by free time (default) or *rotate & share* so the same person isn't
+  perpetually stuck with the unpleasant chores.
 - Cadence in days/weeks/months/years with calendar-correct math.
 - Per-chore lock-to-a-person, or auto-balance.
 - Room × chore matrix with size-scaled durations and a compatibility grid for incompatible cells.
+- **History & stats.** A durable completion log powering a "who pulled their weight" view, most-done
+  chores, recent activity, and a "slipping right now" list.
 - Real-time shared state across devices: per-entity delta sync over a small JSON API (independent
   edits never clobber; ~1s propagation via Server-Sent Events), with an offline outbox fallback.
+- **Installable + printable.** PWA install + offline shell, and a print-optimized per-person "fridge
+  sheet" for the week.
 
 ## Open design decisions & roadmap
 
@@ -59,10 +70,11 @@ Size scaling (small/medium/large/huge) covers most of "rooms aren't the same eff
 cell still needs a bespoke duration (a galley kitchen that mops faster than its size implies), add an
 optional per-cell `minutesOverride` on the derived chore that survives re-apply, shown in the matrix.
 
-### Fairness modes
-Beyond proportional load: an **even-rotation** mode for the unpleasant chores (toilets, trash) so the
-same person doesn't always draw them, and a **shuffle** so a given chore isn't perpetually the same
-kid's job. Both are scheduler-layer changes with clear test cases.
+### Fairness modes — ✅ shipped (Beta)
+Beyond proportional load there's now a **rotate & share** mode: steer an auto chore away from whoever
+last held it, then balance by capacity, then a per-week deterministic shuffle so equally-free people
+take turns. (Pure, seeded, tested.) Possible next step: per-chore rotation opt-in rather than a global
+toggle, and an explicit "unpleasant chore" tag that only those rotate.
 
 ### Escalation policy
 Currently: same holder through delinquency, then escalate auto-assigned child chores to an adult.
@@ -73,11 +85,14 @@ adults), notifications when something escalates, and a "stuck" report of chronic
 - ✅ Finer-grained sync — **done**: per-entity deltas with last-write-wins per record, SSE push, and
   an offline outbox (see `TODO.md` and `public/sync.js`). Remaining stretch: field-level LWW, only if
   same-record/different-field concurrent edits ever become a real problem.
-- A completion **history/stats** view: who did how much, streaks, which chores are chronically late —
-  the data (`lastDone`, completion records) is already being captured.
+- ✅ A completion **history/stats** view — **done**: a durable `history` collection feeds a
+  per-person share view, most-done chores, recent activity, and a "slipping right now" list
+  (`public/stats.js`). Next: streaks and longer-range charts.
 
 ### Quality-of-life
-- PWA install + a print-optimized "fridge sheet" (print stylesheet exists; could be richer).
+- ✅ PWA install + a print-optimized per-person "fridge sheet" — **done** (manifest + service worker +
+  `sw.js`; richer print layout in the stylesheet). Caveat: the service worker needs a secure context,
+  so install/offline works on localhost/HTTPS, not a plain-http LAN IP.
 - Light auth / reverse-proxy guidance for households that want it reachable beyond the LAN.
 - Optional reminders (the obligation model already knows what's due and to whom).
 

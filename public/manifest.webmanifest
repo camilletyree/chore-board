@@ -1,0 +1,15 @@
+{
+  "name": "ChoreBoard — family chore scheduler",
+  "short_name": "ChoreBoard",
+  "description": "A self-hosted household chore scheduler that builds a fair, time-budgeted weekly slate for your family.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eef1ec",
+  "theme_color": "#2f6f5e",
+  "categories": ["productivity", "lifestyle"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -77,15 +77,39 @@ export function buildInstances(chores, weekStartISO, todayISO, grace = 3) {
     out.push({
       uid: `${c.id}#${seq++}`, choreId: c.id, name: c.name, minutes: c.minutes, priority: c.priority,
       adultOnly: !!c.adultOnly || !!c.escalated,   // escalated obligations are adult-only for this cycle
-      assignee: c.assignee || null, holder: c.holder || null,
+      minAge: c.minAge || 0,                       // youngest age allowed to do it solo (0 = any)
+      assignee: c.assignee || null, holder: c.holder || null, lastHolder: c.lastHolder || null,
       day, delinquent, lateCycles: Math.max(0, late), escalated: !!c.escalated,
     });
   }
   return out;
 }
 
+// Tiny deterministic string hash (FNV-1a). Pure — no Math.random, so a "shuffle" is reproducible
+// from a seed (we seed it with the week start), which keeps the engine testable.
+export function hashStr(s) { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
+
+// Candidate comparator for auto-assignment. `balanced` (default) packs onto the person with the
+// highest remaining fraction of weekly capacity. `rotate` first steers a chore AWAY from whoever
+// last held it (so the same kid isn't perpetually stuck with the toilets), then balances by
+// capacity, then breaks remaining ties with a per-week deterministic shuffle so equally-free
+// people take turns week to week. Capacity is still the tiebreak, so load stays fair within rotation.
+function candCmp(inst, d, fairness, seed) {
+  const frac = t => t.weekRem / t.weekCap;
+  if (fairness === 'rotate') {
+    return (a, b) =>
+      ((a.ref.id === inst.lastHolder ? 1 : 0) - (b.ref.id === inst.lastHolder ? 1 : 0))
+      || (frac(b) - frac(a))
+      || (hashStr(seed + ':' + inst.choreId + ':' + a.ref.id) - hashStr(seed + ':' + inst.choreId + ':' + b.ref.id))
+      || (b.dayRem[d] - a.dayRem[d]);
+  }
+  return (a, b) => (frac(b) - frac(a)) || (b.dayRem[d] - a.dayRem[d]);
+}
+
 // Assigns instances to (person, day) bins. Pure; returns assignments + who ended up holding each chore.
-export function assignInstances(instances, people) {
+// opts.fairness: 'balanced' (default) | 'rotate'. opts.seed: stable string (the week start) for shuffle.
+export function assignInstances(instances, people, opts = {}) {
+  const { fairness = 'balanced', seed = '' } = opts;
   const team = people.filter(p => p.active).map(p => {
     const dayRem = []; let weekly = 0;
     for (let d = 0; d < 7; d++) { const cap = isWeekend(d) ? p.weekendBudget : p.weekdayBudget; dayRem.push(cap); weekly += cap; }
@@ -102,13 +126,16 @@ export function assignInstances(instances, people) {
       const d = inst.day; t.dayRem[d] -= inst.minutes; t.weekRem -= inst.minutes; // force-place, may exceed budget
       assignments.push({ ...inst, personId: t.ref.id, dayIndex: d }); holderOf[inst.choreId] = t.ref.id; continue;
     }
-    const eligible = team.filter(t => (!inst.adultOnly || t.ref.isAdult) && (!t.ref.maxTaskMinutes || inst.minutes <= t.ref.maxTaskMinutes));
-    if (!eligible.length) { unassigned.push({ inst, reason: inst.adultOnly ? 'No adult is free for this task' : 'No one can take a task this long' }); continue; }
+    const eligible = team.filter(t =>
+      (!inst.adultOnly || t.ref.isAdult)
+      && (!t.ref.maxTaskMinutes || inst.minutes <= t.ref.maxTaskMinutes)
+      && (!inst.minAge || t.ref.isAdult || t.ref.age == null || t.ref.age >= inst.minAge)); // age-appropriate: adults always qualify; people with no age set are unconstrained
+    if (!eligible.length) { unassigned.push({ inst, reason: inst.adultOnly ? 'No adult is free for this task' : inst.minAge ? 'No one old enough for this task' : 'No one can take a task this long' }); continue; }
     let placed = false;
     for (const d of daysByCloseness(inst.day)) {
       const cands = eligible.filter(t => t.dayRem[d] >= inst.minutes);
       if (!cands.length) continue;
-      cands.sort((a, b) => ((b.weekRem / b.weekCap) - (a.weekRem / a.weekCap)) || (b.dayRem[d] - a.dayRem[d]));
+      cands.sort(candCmp(inst, d, fairness, seed));
       const pick = cands[0]; pick.dayRem[d] -= inst.minutes; pick.weekRem -= inst.minutes;
       assignments.push({ ...inst, personId: pick.ref.id, dayIndex: d }); holderOf[inst.choreId] = pick.ref.id; placed = true; break;
     }
@@ -136,9 +163,10 @@ export function applyMatrix(chores, rooms, types, exclude = []) {
     derived.push({
       id: prev ? prev.id : ('m_' + key.replace(/[^a-z0-9]/gi, '')), matrixKey: key,
       name: `${t.name} — ${r.name}`,
-      minutes, priority: t.priority, intervalCount: t.intervalCount, intervalUnit: t.intervalUnit, adultOnly: !!t.adultOnly,
+      minutes, priority: t.priority, intervalCount: t.intervalCount, intervalUnit: t.intervalUnit, adultOnly: !!t.adultOnly, minAge: t.minAge || 0,
       assignee: prev ? prev.assignee : (t.assignee || null),
       lastDone: prev ? prev.lastDone : null, holder: prev ? prev.holder : null,
+      lastHolder: prev ? (prev.lastHolder || null) : null,
       assignedOn: prev ? prev.assignedOn : null, escalated: prev ? !!prev.escalated : false,
       enabled: prev ? prev.enabled : true,
     });

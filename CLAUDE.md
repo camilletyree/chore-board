@@ -18,8 +18,14 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
    (the caller injects `now`). It's the other pure module shared by browser, server, and tests:
    whole-doc ↔ entities (`decompose`/`recompose`), the merge reducer (`applyChanges`), and the
    local-edit differ (`diffOps`). Sync behavior goes here and gets a test in `test/sync.test.js`.
-3. **`public/app.js` owns side effects:** state, storage, rendering, events, the network sync client.
-   It imports both pure modules. No scheduling *or* sync rules — only orchestration and presentation.
+3. **`public/app.js` owns side effects:** state, storage, rendering, events, the network sync client,
+   the setup wizard, and the only places `Date`/`Math.random`-ish concerns live (e.g. `staggerChores`).
+   It imports the pure modules. No scheduling *or* sync rules — only orchestration and presentation.
+   - **Two more pure modules join the family, same rules (pure, tested, no DOM/IO/`Date.now`):**
+     `public/templates.js` — the chore **library** + the deterministic **home builder** (`buildHome`
+     turns a profile into a board); covered by `test/templates.test.js`. `public/stats.js` —
+     `summarizeHistory` aggregates the completion log for the History view; covered by
+     `test/stats.test.js`. New home/library/stats logic goes in these and gets a test.
 4. **`server.js` is a dumb store.** Serves `public/` statically; persists entities and stamps each
    applied write with a monotonic `_seq`, resolving same-record conflicts by last-write-wins on the
    client `_updatedAt`. That's the *only* logic it has — **no scheduling/domain knowledge**, no deps.
@@ -32,8 +38,21 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
 
 ## Domain model (glossary)
 
-- **chore** — `{id, name, minutes, priority(1–5), intervalCount, intervalUnit, adultOnly, assignee,
-  lastDone, holder, assignedOn, escalated, enabled, matrixKey}`.
+- **chore** — `{id, name, minutes, priority(1–5), intervalCount, intervalUnit, adultOnly, minAge, assignee,
+  lastDone, holder, lastHolder, assignedOn, escalated, enabled, matrixKey}`. `lastHolder` records who
+  most recently did/held it; it's only consulted by the `rotate` fairness mode (otherwise inert).
+- **age-appropriateness** — a chore's `minAge` (0 = any) and a person's optional `age` gate auto
+  eligibility: a kid only gets an auto chore if `age >= minAge`. Adults always qualify; a person with
+  **no `age` set is unconstrained** (back-compat for manually-added people). `assignee`/escalation still
+  override. `templates.js` sets `age` on kids and `minAge` on chores; the Team tab has an **Age** field
+  (blank = no limit), and manually-added chores default `minAge` 0 (no per-chore minAge editor — set
+  `adultOnly` or an assignee instead).
+- **fairness** — `settings.fairness`: `balanced` (default, proportional-capacity packing) or `rotate`
+  (steer a chore away from its `lastHolder`, then balance, then a per-week deterministic shuffle so
+  equally-free people take turns). Set in the week controls; passed to `assignInstances`.
+- **history** — durable completion log: a `history` keyed collection (its own sync collection),
+  one record per check-off `{id, choreId, name, personId, minutes, date, weekStartISO, priority, late}`,
+  **never** cleared by `generate()` (unlike `week.completion`). `stats.js` aggregates it for the History tab.
 - **obligation** — the open instance of a chore. A chore has **at most one** open obligation at a
   time, represented by `assignedOn` (the date it came due) + `holder` (who owns it). `holder === null`
   means "needs auto-assignment". Resting chore: `assignedOn === null`.
@@ -59,24 +78,35 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
    opens due obligations, releases stale child obligations for escalation. The only mutating engine fn.
 2. `buildInstances(chores, weekStartISO, todayISO, grace)` — pure → schedulable instances for the week
    (sets `delinquent`, `lateCycles`, `escalated`, and forces `adultOnly` when escalated).
-3. `assignInstances(instances, people)` — pure → `{assignments, unassigned, load, holderOf}`.
+3. `assignInstances(instances, people, opts?)` — pure → `{assignments, unassigned, load, holderOf}`.
+   `opts = {fairness:'balanced'|'rotate', seed}` (default balanced; `app.js#generate()` passes the
+   week-start as the seed).
    - Locked (holder or assignee) → **force-placed** on that person, *ignoring* budget and task-length
      caps (it's a must-do; the UI shows the over-budget meter in red). Never dropped to `unassigned`.
-   - Auto → eligible filtered by `adultOnly` + per-person `maxTaskMinutes`; placed by first-fit on the
-     day nearest its target, choosing the person with the **highest remaining fraction** of weekly
-     capacity. This proportional balance is deliberate — balancing by raw minutes starves the kids.
+   - Auto → eligible filtered by `adultOnly` + per-person `maxTaskMinutes` + age (`age >= inst.minAge`,
+     adults and no-age people exempt); placed by first-fit on the day nearest its target, choosing the
+     person with the **highest remaining fraction** of weekly capacity. This proportional balance is
+     deliberate — balancing by raw minutes starves the kids.
+   - `rotate` reorders the candidates: avoid `inst.lastHolder` first, then the capacity rule above,
+     then a seeded `hashStr` shuffle (reproducible — no `Math.random`). `app.js#generate()` writes the
+     chosen holder back to `lastHolder` so next cycle shares it out.
 
 `app.js#generate()` then writes `holderOf` back onto each chore so the holder sticks.
 
 ## Invariants worth a test if you touch the engine
 
 - Adult-only (unlocked) never lands on a child; explicit assignee/escalation may override.
+- Age-appropriate: an auto chore with `minAge` never lands on a younger kid; adults and no-age people qualify.
 - A locked/over-budget task is force-placed, not unassigned.
 - Exactly one open obligation per chore; completing clears it and starts the next cadence cycle.
-- `applyMatrix` preserves per-cell state and honors `matrixExclude` and size scaling.
+- `applyMatrix` preserves per-cell state (incl. `lastHolder`) and honors `matrixExclude` and size scaling.
 - Escalation: child + auto + `cycles ≥ escalateAfter` → adult; forced assignee never escalates.
+- Fairness `rotate` steers an auto chore away from its `lastHolder` when someone else has room, and is
+  deterministic for a given seed; `balanced` (default) is unchanged.
 
-`test/scheduler.test.js` covers all of the above. **Run `npm test` after any engine change.**
+`test/scheduler.test.js` covers all of the above. `test/templates.test.js` covers the home builder
+(gating, room derivation, age budgets, matrix-exclusion correctness, determinism) and
+`test/stats.test.js` the history aggregation. **Run `npm test` after any engine/templates/stats change.**
 
 ## Sync invariants worth a test if you touch sync
 
@@ -86,8 +116,10 @@ not to — the value here is that it runs anywhere Node runs and is trivial to h
 - Tombstones (`_deleted`) propagate deletes and drop out of `recompose`.
 - `diffOps` emits an op only for records that actually changed (key-order-insensitive compare).
 - An unsynced local edit in the outbox survives a `pull()` (the `skip` set protects it).
-- Round-trip: `recompose(decompose(S))` preserves the board; `completion` and `matrixExclude` move
-  to/from their entity homes correctly.
+- Round-trip: `recompose(decompose(S))` preserves the board; `completion`, `history`, and
+  `matrixExclude`/`fairness` move to/from their entity homes correctly.
+- `history` is its own keyed collection (durable log), independent of the per-week `completion`
+  collection; the server stays generic over `KEYED`/`SINGLE`, so it needed no server change.
 
 `test/sync.test.js` covers the pure reducers (in `npm test`). `npm run test:integration` spins up a
 real server and drives two simulated clients end-to-end (migration, SSE, LWW). **Run `npm test`
@@ -115,6 +147,18 @@ after any sync change**, and `npm run test:integration` if you touch the wire pr
 - Completion records are keyed by assignment `uid` (`choreId#seq`), which **repeats across weeks**.
   `generate()` clears `week.completion`, so `diffOps` tombstones the old records; LWW handles the
   uid reuse. Don't assume a completion `uid` is globally unique.
+- `history` records use `weekStart#uid` so they're unique across weeks. Checking a box appends one;
+  unchecking tombstones it; `generate()` does **not** clear history (that's the whole point). Don't
+  re-key history off the bare `uid` or it'll collide week to week.
+- A fresh template would otherwise make every chore come due on the first refresh. `app.js#staggerChores`
+  seeds `lastDone` in the past, deterministically per chore id, so first due-dates spread across each
+  chore's cadence. It lives in `app.js` (needs today's date) — keep `templates.js` pure (it leaves
+  `lastDone: null`). `buildHome` ids are deterministic (`c_/t_/r_/p…`), so re-applying a template is stable.
+- The showcase template expands to ~150 chores (15 rooms × the matrix), which is intentional breadth;
+  the scheduler + staggering keep any one week sane. The Chores tab lists them all (matrix ones are
+  read-only there, managed in Rooms).
+- PWA: the service worker only registers in a **secure context** (localhost / HTTPS), so it's a no-op
+  over a plain-http LAN IP — by design. The offline outbox, not the SW, is the real resilience.
 - `data/state.json` is gitignored. Don't commit real family data. The file is `{ serverSeq, entities }`;
   the server migrates an old whole-doc file in place on first start (idempotent), and GCs tombstones >30d.
 - `/api/state` (GET recomposed snapshot / PUT wholesale replace) is kept for back-compat and reset;
